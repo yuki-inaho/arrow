@@ -275,10 +275,8 @@ def build_materials(result, cache_dir: Path, pick: int, rebuild: bool = False) -
 
 MARGIN = 20
 GAP = 12
-HEADER_H = 62
-MAIN_H = 726
+MAIN_H = 920
 TIMELINE_H = 108
-FLOW_H = 108
 PANEL_TITLE_H = 26
 COLUMN_SHARES = (0.18, 0.18, 0.40, 0.24)
 
@@ -290,7 +288,7 @@ TEXT_COLOR = (232, 236, 242)
 ACCENT = (90, 160, 255)
 
 # 観察視点（固定。再生中は動かさない）
-VIEW_3D = {"elev": 18.0, "azim": -72.0}
+VIEW_3D = {"elev": 24.0, "azim": -68.0}
 FRUSTUM_SCALE = 0.45
 FONT_BOLD = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
 
@@ -302,9 +300,12 @@ def font(size: int):
 
 
 def display(points: np.ndarray) -> np.ndarray:
-    """参照カメラ座標 (x 右, y 下, z 前) → 表示用 (x, -y, z)。"""
-    out = np.array(points, dtype=np.float32, copy=True)
-    out[..., 1] *= -1
+    """参照カメラ座標 (x 右, y 下, z 前) → 表示用 (x, z, -y)（Z 上・右手系）。"""
+    source = np.asarray(points, dtype=np.float32)
+    out = np.empty_like(source)
+    out[..., 0] = source[..., 0]
+    out[..., 1] = source[..., 2]
+    out[..., 2] = -source[..., 1]
     return out
 
 
@@ -641,13 +642,9 @@ def compose_frame(cache_dir: Path, frame_t: int) -> Image.Image:
     board = Image.new("RGB", (1920, 1080), BG)
     draw = ImageDraw.Draw(board)
 
-    # ヘッダー
-    draw.text((MARGIN, 12), "ARROW", font=font(30), fill=TEXT_COLOR)
-    draw.text((MARGIN + 130, 20), "連番画像 → 2D・3D 理解", font=font(20), fill=TITLE_COLOR)
-
     columns = column_geometry()
-    rows = stacked_rows(MARGIN + HEADER_H + GAP)
-    top = MARGIN + HEADER_H + GAP
+    top = MARGIN
+    rows = stacked_rows(top)
 
     panels = [
         (columns[0], [("元画像", "overlay", False), ("2D移動", "motion", False),
@@ -680,7 +677,7 @@ def compose_frame(cache_dir: Path, frame_t: int) -> Image.Image:
                               font=font(13), fill=TITLE_COLOR)
 
     # タイムライン領域
-    timeline_y = MARGIN + HEADER_H + GAP + MAIN_H + GAP
+    timeline_y = MARGIN + MAIN_H + GAP
     draw.rounded_rectangle((MARGIN, timeline_y, 1920 - MARGIN, timeline_y + TIMELINE_H),
                            radius=8, fill=PANEL_BG, outline=BORDER, width=1)
     draw.polygon([(MARGIN + 22, timeline_y + 18), (MARGIN + 22, timeline_y + 44),
@@ -713,54 +710,7 @@ def compose_frame(cache_dir: Path, frame_t: int) -> Image.Image:
                            width=2 if index == frame_t else 1)
             x += thumb_w + 4
 
-    # 処理フロー領域（静的な説明）
-    flow_y = timeline_y + TIMELINE_H + GAP
-    draw.rounded_rectangle((MARGIN, flow_y, 1920 - MARGIN, flow_y + FLOW_H),
-                           radius=8, fill=PANEL_BG, outline=BORDER, width=1)
-    steps = [("連番画像", "folder"), ("ARROW推論", "gear"), ("2D・3D解析結果", "cube"),
-             ("閲覧・保存", "screen")]
-    step_w = (1920 - 2 * MARGIN - 80) // 4
-    cx = MARGIN + 40
-    middle = flow_y + FLOW_H // 2
-    for index, (label, icon) in enumerate(steps):
-        icon_cx = cx + step_w // 2
-        draw_icon(draw, icon, icon_cx, middle - 12)
-        text_width = draw.textlength(label, font=font(18))
-        draw.text((icon_cx - text_width / 2, middle + 16), label, font=font(18), fill=TEXT_COLOR)
-        if index < 3:
-            ax0 = cx + step_w - 16
-            draw.line([ax0, middle - 12, ax0 + 34, middle - 12], fill=(96, 104, 118), width=3)
-            draw.polygon([(ax0 + 42, middle - 12), (ax0 + 32, middle - 17), (ax0 + 32, middle - 7)],
-                         fill=(96, 104, 118))
-        cx += step_w + 8
-
     return board
-
-
-def draw_icon(draw: ImageDraw.ImageDraw, kind: str, cx: int, cy: int) -> None:
-    """処理フローの小さな図形アイコン（文字量を抑えるための視覚記号）。"""
-    color = (150, 158, 170)
-    if kind == "folder":
-        draw.polygon([(cx - 16, cy - 10), (cx - 4, cy - 10), (cx, cy - 6), (cx + 16, cy - 6),
-                      (cx + 16, cy + 10), (cx - 16, cy + 10)], fill=color)
-    elif kind == "gear":
-        draw.ellipse([cx - 11, cy - 11, cx + 11, cy + 11], outline=color, width=3)
-        for angle in range(0, 360, 45):
-            dx, dy = np.cos(np.radians(angle)), np.sin(np.radians(angle))
-            draw.line([cx + dx * 11, cy + dy * 11, cx + dx * 16, cy + dy * 16], fill=color, width=3)
-        draw.ellipse([cx - 4, cy - 4, cx + 4, cy + 4], fill=color)
-    elif kind == "cube":
-        top = [(cx, cy - 12), (cx + 14, cy - 5), (cx, cy + 2), (cx - 14, cy - 5)]
-        draw.polygon(top, outline=color, fill=None)
-        draw.line([cx - 14, cy - 5, cx - 14, cy + 7], fill=color, width=2)
-        draw.line([cx + 14, cy - 5, cx + 14, cy + 7], fill=color, width=2)
-        draw.line([cx, cy + 2, cx, cy + 14], fill=color, width=2)
-        draw.line([cx - 14, cy + 7, cx, cy + 14], fill=color, width=2)
-        draw.line([cx + 14, cy + 7, cx, cy + 14], fill=color, width=2)
-    elif kind == "screen":
-        draw.rectangle([cx - 16, cy - 12, cx + 16, cy + 8], outline=color, width=3)
-        draw.line([cx, cy + 8, cx, cy + 13], fill=color, width=3)
-        draw.line([cx - 8, cy + 13, cx + 8, cy + 13], fill=color, width=3)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
