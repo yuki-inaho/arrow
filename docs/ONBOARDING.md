@@ -59,6 +59,7 @@
 | UI E2E テスト | `tests/test_viewer_ui.py` | Playwright でビューアを操作・スクショ（マーカー `ui`） |
 | スクリーンショットツール | `scripts/viewer_screenshot.py` | ビューア起動 → UI 実行 → 描画待ち → PNG 保存 |
 | ビューア実行 E2E | `tests/viewer_run_e2e.py` | `POST /api/plan` → `/api/run` → `complete` → シーン取得の確認 |
+| ワークフロー整理 | `docs/WORKFLOW.md` | 連番画像 → 中間成果物 NPZ → 可視化（処理と可視化の分離）の手順・実測・提案 |
 | 本ドキュメント | `docs/ONBOARDING.md` | 本資料（機械固有検証値の記録場所） |
 
 ## 4. タスク境界（任せること / 任せないこと）
@@ -156,6 +157,7 @@ uv run pytest -m ui  -v                     # Playwright UI E2E（2 テスト）
   - `uv run arrow inspect results/railway.npz`
   - `uv run arrow-viewer --scene results/railway.npz`（`--port` / `--host` / `--root` 可）
   - `uv run python scripts/viewer_screenshot.py --run-sample`
+  - `uv run python scripts/process_sequence.py <連番フォルダ> --output-dir results/<name>_clips --clip-frames 24 --tasks track pose reconstruct depth`（クリップ分割の量産。再開可）
   - `uv run pytest tests/test_e2e_arrow.py tests/test_viewer_ui.py -v -s`
 - **依存ライブラリ（本機検証値）:** `torch 2.14.1+cu130`, `torchvision 0.29.1`, `timm 1.0.29`,
   `onnxruntime 1.31.0`（skyseg、CPU 実行）, `numpy 2.x`, `av`, `safetensors`, `huggingface-hub`,
