@@ -314,6 +314,7 @@ ACCENT = (90, 160, 255)
 
 # 観察視点（固定。再生中は動かさない）
 VIEW_3D = {"elev": 24.0, "azim": -68.0}
+VIEW_ZOOM_3D = 1.5  # 3D 主画面の追加ズーム（点群が見やすい大きさになるよう表示範囲を縮める）
 FRUSTUM_SCALE = 0.45
 FONT_BOLD = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
 
@@ -415,10 +416,12 @@ def render_scene3d(frame_t: int, tracks, cloud, cameras, bounds,
     ax = fig.add_subplot(projection="3d", facecolor="#0F1116")
     _setup_axes(ax, bounds)
 
+    # 描画順 1/3: RGB-D 点群（再構成表面）
     points = display(cloud["points"])
     ax.scatter(points[:, 0], points[:, 1], points[:, 2],  # pyright: ignore[reportArgumentType]
                s=2, c=cloud["rgb"].astype(np.float32) / 255.0, linewidths=0, alpha=0.85)
 
+    # 描画順 2/3: 追跡点（全軌跡 → 現在フレームのヘッドマーカー）
     for seed in range(xyz.shape[1]):
         line = display(xyz[:, seed, :])
         keep = ~np.isnan(line).any(-1)
@@ -430,6 +433,8 @@ def render_scene3d(frame_t: int, tracks, cloud, cameras, bounds,
     ax.scatter(heads[keep, 0], heads[keep, 1], heads[keep, 2],  # pyright: ignore[reportArgumentType]
                s=34, c=colors[keep], depthshade=False, edgecolors="white", linewidths=0.4)
 
+    # 描画順 3/3: カメラ視錐台（最後に描いて点群に埋もれないように。
+    # 過去フレームは薄く、現在フレームのみ強調）
     cameras_to_ref = cameras["camera_to_reference"]
     for frame in range(len(cameras_to_ref)):
         if not valid[frame]:
@@ -438,7 +443,7 @@ def render_scene3d(frame_t: int, tracks, cloud, cameras, bounds,
         for segment in frustum_segments(cameras_to_ref[frame], frustum_scale):
             ax.plot(segment[:, 0], segment[:, 1], segment[:, 2],
                     color="#5AA0FF" if current else "#4A6A9C",
-                    lw=2.0 if current else 0.9, alpha=1.0 if current else 0.5)
+                    lw=2.0 if current else 0.9, alpha=1.0 if current else 0.35)
 
     _axis_indicator(ax, bounds)
     ax.view_init(elev=VIEW_3D["elev"], azim=VIEW_3D["azim"])
@@ -639,6 +644,12 @@ def build_3d_materials(cache_dir: Path, rebuild: bool = False,
             )
     else:
         bounds = scene_bounds(display(cloud["points"]), display(tracks["xyz"]))
+    # 追加ズーム: 点群が大きく見えるように、表示範囲を中心周りに VIEW_ZOOM_3D 分の 1 に縮める
+    for axis in ("x", "y", "z"):
+        axis_low, axis_high = bounds[axis]
+        center = (axis_low + axis_high) / 2
+        half = (axis_high - axis_low) / 2 / VIEW_ZOOM_3D
+        bounds[axis] = (center - half, center + half)
     track_bounds = scene_bounds(display(tracks["xyz"]))
 
     started = time.perf_counter()
