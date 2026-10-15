@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""中間出力物キャッシュ（render_dashboard.py と共用）から Rerun 記録（.rrd）を書き出す。
+"""中間出力物キャッシュ（render_dashboard.py・render_multipanel.py と共用）から
+Rerun 記録（.rrd）を書き出す。
 
-- 入力: 保存済みシーン (.npz)。キャッシュが無ければ render_dashboard.py と同じ層で構築する
-  （3D キャンバス PNG は rerun 出力では不要）。
-- 出力: .rrd（rerun-sdk 0.39）。記録内容:
-  - 3D 再構成点群（RGB 色付け・静的）
-  - 3D 軌跡（2D パネルと同じ色のラインストリップ・静的）
-  - フレームごと: 入力+2D追跡の画像、深度カラーマップ、トラック先頭点（時間軸 "frame"）
-- 表示座標は (x, -y, z) に変換（見上げ方向をそろえる）。
-- クリップ結合（merge_clip_outputs.py）からも `send_blueprint` / `log_scene` を再利用し、
-  1 セッションへ連番フレームでログして単一レコーディングの .rrd を作れる。
+動画（マルチパネル）と同じ情報・同じ向き（上が本当の上）・近い観察視点で、
+インタラクティブに確認できる記録を作る:
+
+- 3D ビュー（主画面）: 点群（RGB・細かい点）、識別色の全軌跡、カメラ視錐台
+  （全フレームは薄青、現在フレームは明青で強調）、カメラ位置の軌跡、XYZ 軸
+- 2D ビュー（6 面）: 元画像+2D追跡 / 2D移動 / 奥行き / 表面法線 / 解析対象領域 /
+  信頼度・可視性
+- 表示座標は (x, z, -y)（Z 上）に変換。動画と同じ「上が本当の上」の向き。
+- 2D 画像は JPEG に再エンコードして記録（ファイルサイズ削減）。
 
 使い方::
 
@@ -21,6 +22,7 @@
 """
 
 import argparse
+from io import BytesIO
 from pathlib import Path
 import sys
 
@@ -30,27 +32,93 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from render_dashboard import default_cache_dir, ensure_cache  # noqa: E402
+from render_multipanel import FRUSTUM_SCALE, frustum_segments  # noqa: E402
+
+# 2D ビュー（表示パス → キャッシュ素材名）。動画の第1・第2列と同じ 6 面。
+PANEL_VIEWS = {
+    "view/input_2d_tracks": "overlay",
+    "view/motion": "motion",
+    "view/depth": "depth",
+    "view/normal": "normal",
+    "view/mask": "mask",
+    "view/confvis": "confvis",
+}
+
+BACKGROUND = [15, 17, 22, 255]          # 動画と同じ暗色基調
+CAMERA_DIM = (85, 115, 165, 255)        # 過去フレームの視錐台（薄青）
+CAMERA_CURRENT = (90, 160, 255, 255)    # 現在フレームの視錐台（強調）
+CAMERA_PATH = (120, 160, 220, 255)      # カメラ位置の軌跡
+AXIS_COLORS = [[255, 107, 107], [123, 216, 143], [107, 155, 255]]  # X=赤, Y=緑, Z=青
 
 
 def to_display(points: np.ndarray) -> np.ndarray:
-    """参照カメラ座標 (x 右, y 下, z 前) を表示用 (x, -y, z) に変換する。"""
-    out = np.array(points, dtype=np.float32, copy=True)
-    out[..., 1] *= -1
+    """参照カメラ座標 (x 右, y 下, z 前) を表示用 (x, z, -y)（Z 上）に変換する。"""
+    source = np.asarray(points, dtype=np.float32)
+    out = np.empty_like(source)
+    out[..., 0] = source[..., 0]
+    out[..., 1] = source[..., 2]
+    out[..., 2] = -source[..., 1]
     return out
 
 
-def send_blueprint() -> None:
-    """ビューアの初期レイアウト（3D を主、右に 2D 2 面）を送る。"""
+def _jpeg_bytes(path: Path) -> bytes:
+    buffer = BytesIO()
+    Image.open(path).convert("RGB").save(buffer, format="JPEG", quality=88)
+    return buffer.getvalue()
+
+
+def estimate_view(cache_dir: Path) -> tuple[np.ndarray, np.ndarray]:
+    """点群から観察視点（eye 位置, 注視点）を推定する（表示座標・Z 上）。
+
+    動画（matplotlib view_init）と同系の「後方やや左・斜め上から見下ろす」向き。
+    """
+    cloud = np.load(cache_dir / "series" / "cloud.npz")["points"]
+    sample = to_display(cloud[:: max(1, len(cloud) // 20000)])
+    low, high = sample.min(0), sample.max(0)
+    center = (low + high) / 2
+    span = float(np.max(high - low))
+    eye = center + np.array([-0.3, -2.0, 1.0], dtype=np.float32) * span
+    return eye, center
+
+
+def send_blueprint(eye_position: np.ndarray, look_target: np.ndarray) -> None:
+    """ビューアの初期レイアウト（3D 主画面 + 2D 6 面 + 暗色スタイル + 観察視点）。"""
     import rerun as rr
     import rerun.blueprint as rrb
 
     rr.send_blueprint(
         rrb.Blueprint(
             rrb.Horizontal(
-                rrb.Spatial3DView(origin="/world", name="3D 再構成 + 追跡"),
+                rrb.Spatial3DView(
+                    origin="/world",
+                    name="3D 再構成・追跡",
+                    background=BACKGROUND,
+                    eye_controls=rrb.EyeControls3D(
+                        kind="orbital",
+                        position=[float(v) for v in eye_position],
+                        look_target=[float(v) for v in look_target],
+                        eye_up=[0.0, 0.0, 1.0],
+                    ),
+                ),
                 rrb.Vertical(
-                    rrb.Spatial2DView(origin="view/input_2d_tracks", name="入力 + 2D 追跡"),
-                    rrb.Spatial2DView(origin="view/depth", name="相対深度"),
+                    rrb.Horizontal(
+                        rrb.Spatial2DView(origin="view/input_2d_tracks", name="元画像 + 2D追跡",
+                                          background=BACKGROUND),
+                        rrb.Spatial2DView(origin="view/motion", name="2D移動",
+                                          background=BACKGROUND),
+                    ),
+                    rrb.Horizontal(
+                        rrb.Spatial2DView(origin="view/depth", name="奥行き",
+                                          background=BACKGROUND),
+                        rrb.Spatial2DView(origin="view/normal", name="表面法線",
+                                          background=BACKGROUND),
+                    ),
+                    rrb.Horizontal(
+                        rrb.Spatial2DView(origin="view/mask", name="解析対象領域",
+                                          background=BACKGROUND),
+                        rrb.Spatial2DView(origin="view/confvis", name="信頼度・可視性",
+                                          background=BACKGROUND),
+                    ),
                 ),
                 column_shares=[2, 1],
             ),
@@ -61,8 +129,8 @@ def send_blueprint() -> None:
 def log_scene(cache_dir: Path, manifest: dict, *, frame_offset: int = 0, log_static: bool = True) -> int:
     """キャッシュ済みシーンを現在の rerun セッションへログする（保存はしない）。
 
-    log_static は点群・全軌跡（static=True）を送るかどうか。クリップ結合では
-    最初のクリップだけ True にすると、全体で 1 回の静的記録になる。
+    log_static は点群・全軌跡・全カメラ視錐台（static=True）を送るかどうか。
+    クリップ結合では最初のクリップだけ True にすると、全体で 1 回の静的記録になる。
     フレーム軸は `frame_offset` を起点にした連番。戻り値はログしたフレーム数。
     """
     import rerun as rr
@@ -71,15 +139,18 @@ def log_scene(cache_dir: Path, manifest: dict, *, frame_offset: int = 0, log_sta
     cached_cloud = np.load(cache_dir / manifest["series"]["cloud"])
     xyz = cached_tracks["xyz"]           # [T, P, 3]
     colors = cached_tracks["colors"]     # [P, 3] uint8
-    cloud_points = cached_cloud["points"]
+    cloud_points = to_display(cached_cloud["points"])
     cloud_rgb = cached_cloud["rgb"]
 
-    # 静的記録: 点群と全フレームの軌跡（static=True で全タイムラインに表示。
-    # static を付けないと log_time 軸のみに属し、"frame" 軸表示時に隠れる）
+    cameras_path = cache_dir / "series" / "cameras.npz"
+    cameras = dict(np.load(cameras_path)) if cameras_path.is_file() else None
+
+    # 静的記録（点群・全軌跡・全カメラ・軸）。static=True を付けないと
+    # log_time 軸のみに属し、"frame" 軸表示時に隠れる。
     if log_static:
         rr.log(
             "world/reconstruction",
-            rr.Points3D(to_display(cloud_points), colors=cloud_rgb, radii=0.06),
+            rr.Points3D(cloud_points, colors=cloud_rgb, radii=0.025),
             static=True,
         )
         strips = []
@@ -92,25 +163,64 @@ def log_scene(cache_dir: Path, manifest: dict, *, frame_offset: int = 0, log_sta
                 strip_colors.append(colors[pick_index])
         rr.log(
             "world/tracks",
-            rr.LineStrips3D(strips, colors=np.array(strip_colors, dtype=np.uint8), radii=0.05),
+            rr.LineStrips3D(strips, colors=np.array(strip_colors, dtype=np.uint8), radii=0.02),
+            static=True,
+        )
+        if cameras is not None:
+            matrices = cameras["camera_to_reference"]
+            frusta = []
+            for frame in range(len(matrices)):
+                if cameras["valid"][frame]:
+                    frusta.extend(frustum_segments(matrices[frame], FRUSTUM_SCALE))
+            if frusta:
+                rr.log(
+                    "world/cameras",
+                    rr.LineStrips3D(frusta, colors=[CAMERA_DIM] * len(frusta), radii=0.02),
+                    static=True,
+                )
+            centers = to_display(matrices[:, :3, 3])
+            rr.log(
+                "world/camera_path",
+                rr.LineStrips3D([centers], colors=[CAMERA_PATH], radii=0.02),
+                static=True,
+            )
+        span = float(np.max(np.ptp(cloud_points, axis=0)))
+        length = 0.05 * span
+        origin = np.zeros(3, dtype=np.float32)
+        rr.log(
+            "world/axis",
+            rr.LineStrips3D(
+                [np.stack([origin, [length, 0, 0]]),
+                 np.stack([origin, [0, length, 0]]),
+                 np.stack([origin, [0, 0, length]])],
+                colors=AXIS_COLORS,
+                radii=0.02,
+            ),
             static=True,
         )
 
-    # 時間軸に沿った記録
+    # 時間軸に沿った記録: 2D 6 面 + 追跡点マーカー + 現在カメラの視錐台
     pattern = manifest["panels_pattern"]
     frames = manifest["scene"]["frames"]
     for frame_t in range(frames):
         rr.set_time("frame", sequence=frame_offset + frame_t)
-        overlay = np.asarray(Image.open(cache_dir / pattern.format(index=frame_t, panel="overlay")))
-        depth = np.asarray(Image.open(cache_dir / pattern.format(index=frame_t, panel="depth")))
-        rr.log("view/input_2d_tracks", rr.Image(overlay))
-        rr.log("view/depth", rr.Image(depth))
+        for view_path, panel in PANEL_VIEWS.items():
+            image_path = cache_dir / pattern.format(index=frame_t, panel=panel)
+            if image_path.is_file():
+                rr.log(view_path, rr.EncodedImage(contents=_jpeg_bytes(image_path),
+                                                  media_type="image/jpeg"))
         heads = xyz[frame_t]
         keep = np.isfinite(heads).all(-1)
         if keep.any():
             rr.log(
                 "world/track_heads",
-                rr.Points3D(to_display(heads[keep]), colors=colors[keep], radii=0.05),
+                rr.Points3D(to_display(heads[keep]), colors=colors[keep], radii=0.045),
+            )
+        if cameras is not None and cameras["valid"][frame_t]:
+            segments = frustum_segments(cameras["camera_to_reference"][frame_t], FRUSTUM_SCALE)
+            rr.log(
+                "world/current_camera",
+                rr.LineStrips3D(segments, colors=[CAMERA_CURRENT] * len(segments), radii=0.03),
             )
     return frames
 
@@ -146,7 +256,8 @@ def main(argv: list[str] | None = None) -> int:
     rr.init(f"arrow_{args.scene.stem}", recording_id=args.recording_id, spawn=False)
     if args.recording_id:
         print(f"recording id を共通化: {args.recording_id}")
-    send_blueprint()
+    eye, target = estimate_view(cache_dir)
+    send_blueprint(eye, target)
     frames = log_scene(cache_dir, manifest, frame_offset=args.frame_offset, log_static=True)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)

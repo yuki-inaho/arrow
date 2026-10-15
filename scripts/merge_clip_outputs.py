@@ -112,7 +112,8 @@ def merge_reruns(clips: list[tuple[Path, int, int]], output: Path, pick: int) ->
 
     output.parent.mkdir(parents=True, exist_ok=True)
     rr.init("arrow_all_clips", spawn=False)
-    export_rerun.send_blueprint()
+    eye, target = export_rerun.estimate_view(default_cache_dir(clips[0][0]))
+    export_rerun.send_blueprint(eye, target)
     frame_end = 0
     log_static = True
     for npz_path, start, _ in clips:
