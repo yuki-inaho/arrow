@@ -152,8 +152,13 @@ def render_mask(sky_frame: np.ndarray, size) -> Image.Image:
     return image.convert("RGB")
 
 
-def build_materials(result, cache_dir: Path, pick: int, rebuild: bool = False) -> dict:
-    """新パネル素材と系列をキャッシュへ追加する（既存分は再利用）。"""
+def build_materials(result, cache_dir: Path, pick: int, rebuild: bool = False,
+                    alignment: dict | None = None) -> dict:
+    """新パネル素材と系列をキャッシュへ追加する（既存分は再利用）。
+
+    alignment 指定時は深度パネルを「世界共通の色範囲・スケール」で上書き再生成し、
+    返り値の depth_range も世界範囲に置き換える（クリップ結合時の色の一貫性）。
+    """
     # 信頼度の正規化範囲（クリップ全体・有限値のみ）
     confidence = result.predictions.point_confidence[0].numpy()
     finite = confidence[np.isfinite(confidence)]
@@ -207,6 +212,23 @@ def build_materials(result, cache_dir: Path, pick: int, rebuild: bool = False) -
             ).save(thumb)
     log(f"  パネル素材 {frames} フレーム分を生成（{time.perf_counter() - started:.1f} 秒）")
 
+    # 深度パネル: alignment 指定時は世界共通の色範囲・スケールで上書き再生成する
+    # （クリップごとの相対値を世界スケールに補正し、クリップを結合しても色がちぐはぐにならないように）
+    world_depth_range = None
+    if alignment and alignment.get("depth_range_world"):
+        from render_dashboard import depth_grid, render_depth
+
+        low_world, high_world = (float(value) for value in alignment["depth_range_world"])
+        depth_scale = float(alignment["scale"])
+        z, _, _, _ = depth_grid(result)
+        for frame_t in range(frames):
+            render_depth(z * depth_scale, frame_t, low_world, high_world, width, height).save(
+                panels / f"{frame_t:04d}_depth.png"
+            )
+        world_depth_range = {"low": low_world, "high": high_world}
+        log(f"  深度パネルを世界範囲で再生成（{low_world:.2f}–{high_world:.2f}、"
+            f"スケール {depth_scale:.3f}）")
+
     # カメラ姿勢（pose グループから推定して保存）
     cameras_path = series / "cameras.npz"
     if rebuild or not cameras_path.is_file():
@@ -259,7 +281,7 @@ def build_materials(result, cache_dir: Path, pick: int, rebuild: bool = False) -
         )
         log(f"  集計系列を保存（全追跡点数 {seeds}）")
 
-    return {"materials": {
+    payload: dict = {"materials": {
         "created_at": utc_now(),
         "panels": ["overlay", "depth", "canvas", "motion", "confvis", "normal", "mask"],
         "thumbs": "thumbs/{index:04d}_thumb.png",
@@ -269,6 +291,9 @@ def build_materials(result, cache_dir: Path, pick: int, rebuild: bool = False) -
                                      "high": float(high)},
         "visibility_threshold": VISIBILITY_THRESHOLD,
     }}
+    if world_depth_range is not None:
+        payload["depth_range"] = world_depth_range
+    return payload
 
 
 # --- 3D 系パネル（series からオフライン描画・視点固定・キャッシュ化） ---------------------
@@ -371,8 +396,12 @@ def _axis_indicator(ax, bounds) -> None:
         ax.plot([x0, x0 + vector[0]], [y0, y0 + vector[1]], [z0, z0 + vector[2]], color=color, lw=2.0)
 
 
-def render_scene3d(frame_t: int, tracks, cloud, cameras, bounds) -> Image.Image:
-    """3D再構成・追跡: 点群 + 軌跡（現在=明るいマーカー/過去=半透明）+ カメラ視錐台（現在を強調）。"""
+def render_scene3d(frame_t: int, tracks, cloud, cameras, bounds,
+                   frustum_scale: float = FRUSTUM_SCALE) -> Image.Image:
+    """3D再構成・追跡: 点群 + 軌跡（現在=明るいマーカー/過去=半透明）+ カメラ視錐台（現在を強調）。
+
+    frustum_scale は視錐台の大きさ（表示範囲に比例させると世界座標でも視認できる）。
+    """
     import matplotlib
 
     matplotlib.use("Agg")
@@ -406,7 +435,7 @@ def render_scene3d(frame_t: int, tracks, cloud, cameras, bounds) -> Image.Image:
         if not valid[frame]:
             continue
         current = frame == frame_t
-        for segment in frustum_segments(cameras_to_ref[frame], FRUSTUM_SCALE):
+        for segment in frustum_segments(cameras_to_ref[frame], frustum_scale):
             ax.plot(segment[:, 0], segment[:, 1], segment[:, 2],
                     color="#5AA0FF" if current else "#4A6A9C",
                     lw=2.0 if current else 0.9, alpha=1.0 if current else 0.5)
@@ -421,8 +450,11 @@ def render_scene3d(frame_t: int, tracks, cloud, cameras, bounds) -> Image.Image:
     return Image.fromarray(array.copy())
 
 
-def render_cam3d(frame_t: int, cameras) -> Image.Image:
-    """カメラ姿勢: 上方からの視点。位置（x, -y）と撮影方向。現在フレームを強調。"""
+def render_cam3d(frame_t: int, cameras, extent=None) -> Image.Image:
+    """カメラ姿勢: 上方からの視点。位置（x, 前）と撮影方向。現在フレームを強調。
+
+    extent を渡すと表示範囲を固定できる（クリップ間で共通の見え方にする）。
+    """
     import matplotlib
 
     matplotlib.use("Agg")
@@ -432,27 +464,39 @@ def render_cam3d(frame_t: int, cameras) -> Image.Image:
     matrices = cameras["camera_to_reference"]
     valid = cameras["valid"]
     positions = np.array([display(matrix[:3, 3]) for matrix in matrices], dtype=np.float32)
-    forward = np.array([display(matrix[:3, :3] @ np.array([0, 0, 1.0])) for matrix in matrices],
-                       dtype=np.float32)
+
+    # 表示範囲を先に決め、視錐台の大きさを範囲に比例させる
+    finite = positions[valid]
+    if extent is not None:
+        span = max(float(extent[0][1]) - float(extent[0][0]),
+                   float(extent[1][1]) - float(extent[1][0]))
+    elif len(finite):
+        span = float(np.max(finite.max(0) - finite.min(0)))
+    else:
+        span = 1.0
+    span = max(span, 1e-6)
+    frustum_scale = span * 0.06
 
     fig = plt.figure(figsize=(4.42, 1.98), dpi=100, facecolor="#0F1116")
     ax = fig.add_subplot(facecolor="#0F1116")
-    for frame in range(len(positions)):
+    for frame in range(len(matrices)):
         if not valid[frame]:
             continue
         current = frame == frame_t
         color = "#5AA0FF" if current else "#3A5A8C"
+        alpha = 1.0 if current else 0.35
+        linewidth = 2.2 if current else 0.8
+        for segment in frustum_segments(matrices[frame], frustum_scale):
+            ax.plot(segment[:, 0], segment[:, 1], color=color, lw=linewidth, alpha=alpha,
+                    solid_capstyle="round")
         x, y = positions[frame, 0], positions[frame, 1]
-        ax.plot([x - 0.08, x + 0.08], [y, y], color=color, lw=2.4 if current else 1.0,
-                alpha=1.0 if current else 0.35, solid_capstyle="round")
-        fx, fy = forward[frame, 0], forward[frame, 1]
-        norm = float(np.hypot(fx, fy)) or 1.0
-        ax.arrow(x, y, fx / norm * 0.35, fy / norm * 0.35, head_width=0.06, head_length=0.08,
-                 color=color, lw=1.6 if current else 0.8, alpha=1.0 if current else 0.4,
-                 length_includes_head=True)
-    finite = positions[valid]
-    if len(finite):
-        pad = 0.15 * float(np.max(finite.max(0) - finite.min(0)))
+        ax.plot(x, y, "o", color=color, markersize=4.5 if current else 2.0,
+                alpha=1.0 if current else 0.45)
+    if extent is not None:
+        ax.set_xlim(float(extent[0][0]), float(extent[0][1]))
+        ax.set_ylim(float(extent[1][0]), float(extent[1][1]))
+    elif len(finite):
+        pad = 0.15 * span
         ax.set_xlim(float(finite[:, 0].min()) - pad, float(finite[:, 0].max()) + pad)
         ax.set_ylim(float(finite[:, 1].min()) - pad, float(finite[:, 1].max()) + pad)
     ax.set_aspect("equal")
@@ -535,26 +579,66 @@ def render_summary(frame_t: int, summary: dict) -> Image.Image:
     return image
 
 
-def build_3d_materials(cache_dir: Path, rebuild: bool = False) -> None:
-    """3D 系パネル（scene3d/cam3d/tracks3d/summary）をキャッシュへ追加する。"""
+def build_3d_materials(cache_dir: Path, rebuild: bool = False,
+                       alignment: dict | None = None) -> None:
+    """3D 系パネル（scene3d/cam3d/tracks3d/summary）をキャッシュへ追加する。
+
+    alignment 指定時は点群・軌跡・カメラを世界座標へ変換し、視点も世界共通の
+    バウンズ（クリップ間で同一の見え方）にする。
+    """
     series = cache_dir / "series"
-    tracks = np.load(series / "tracks.npz")
-    cloud = np.load(series / "cloud.npz")
+    tracks = dict(np.load(series / "tracks.npz"))
+    cloud = dict(np.load(series / "cloud.npz"))
     cameras = dict(np.load(series / "cameras.npz"))
     summary_npz = np.load(series / "summary.npz")
     summary = {key: summary_npz[key] for key in summary_npz.files}
     summary["camera_valid"] = cameras["valid"]
 
+    if alignment is not None:
+        scale = float(alignment["scale"])
+        rotation = np.asarray(alignment["rotation"], dtype=np.float32)
+        translation = np.asarray(alignment["translation"], dtype=np.float32)
+        cloud["points"] = scale * (cloud["points"] @ rotation.T) + translation
+        tracks["xyz"] = scale * (tracks["xyz"] @ rotation.T) + translation
+        matrices = cameras["camera_to_reference"].astype(np.float32)
+        new_rotation = np.einsum("ij,fjk->fik", rotation, matrices[:, :3, :3])
+        new_translation = scale * (matrices[:, :3, 3] @ rotation.T) + translation
+        cameras["camera_to_reference"] = np.concatenate(
+            [np.concatenate([new_rotation, new_translation[..., None]], axis=2),
+             np.tile(np.array([0, 0, 0, 1], dtype=np.float32), (len(matrices), 1, 1))],
+            axis=1,
+        )
+
     frames = int(summary["frames"])
     panels = cache_dir / "panels"
-    bounds = scene_bounds(display(cloud["points"]), display(tracks["xyz"]))
+    world = alignment.get("world_bounds") if alignment else None
+    if world:
+        low = np.asarray(world["low"], dtype=np.float32)
+        high = np.asarray(world["high"], dtype=np.float32)
+        # 参照座標 → 表示座標 (x, z, -y) に合わせて各軸の min/max を組み替える
+        low_display = np.array([low[0], low[2], -high[1]], dtype=np.float32)
+        high_display = np.array([high[0], high[2], -low[1]], dtype=np.float32)
+        pad = 0.06 * float(np.max(high_display - low_display))
+        bounds = {
+            "x": (float(low_display[0] - pad), float(high_display[0] + pad)),
+            "y": (float(low_display[1] - pad), float(high_display[1] + pad)),
+            "z": (float(low_display[2] - pad), float(high_display[2] + pad)),
+        }
+    else:
+        bounds = scene_bounds(display(cloud["points"]), display(tracks["xyz"]))
     track_bounds = scene_bounds(display(tracks["xyz"]))
 
     started = time.perf_counter()
+    camera_extent = (bounds["x"], bounds["y"])
+    # 視錐台の大きさは表示範囲に比例させる（世界座標では固定値だと見えないほど小さくなる）
+    span = max(bounds["x"][1] - bounds["x"][0], bounds["y"][1] - bounds["y"][0],
+               bounds["z"][1] - bounds["z"][0])
+    frustum_scale = span * 0.05
     for frame_t in range(frames):
         targets = [
-            ("scene3d", lambda t=frame_t: render_scene3d(t, tracks, cloud, cameras, bounds)),
-            ("cam3d", lambda t=frame_t: render_cam3d(t, cameras)),
+            ("scene3d", lambda t=frame_t: render_scene3d(t, tracks, cloud, cameras, bounds,
+                                                         frustum_scale)),
+            ("cam3d", lambda t=frame_t: render_cam3d(t, cameras, camera_extent)),
             ("tracks3d", lambda t=frame_t: render_tracks3d(t, tracks, track_bounds)),
             ("summary", lambda t=frame_t: render_summary(t, summary)),
         ]
@@ -720,6 +804,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--cache-dir", type=Path, help="キャッシュ先（既定: results/dashboard_cache/…）")
     parser.add_argument("--pick", type=int, default=56, help="識別色を付ける追跡点の数（既定 56）")
     parser.add_argument("--rebuild-materials", action="store_true", help="素材を再生成する")
+    parser.add_argument("--alignment", type=Path,
+                        help="align_clip_scenes.py の alignments.json（クリップ結合の座標系接続を適用）")
     parser.add_argument("--output", type=Path, help="統合動画 mp4 を出力する（全フレーム合成 → エンコード）")
     parser.add_argument("--fps", type=int, default=30, help="動画 fps（既定 30。仕様の原則）")
     parser.add_argument("--hold", type=int, default=1,
@@ -732,7 +818,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="合成連番の出力先（既定: results/video_concept/build/multipanel_frames）")
     args = parser.parse_args(argv)
     for name in ("scene", "canvas_frames", "cache_dir", "output", "summary_output",
-                 "frame_output", "config_output", "frames_dir"):
+                 "frame_output", "config_output", "frames_dir", "alignment"):
         value = getattr(args, name)
         if value is not None:
             setattr(args, name, value.expanduser().resolve())
@@ -750,12 +836,28 @@ def main(argv: list[str] | None = None) -> int:
     result, manifest, hit = ensure_cache(args.scene, cache_dir, args.pick, canvas_frames, False)
     log(f"キャッシュ: {'ヒット' if hit else '構築'}（{time.perf_counter() - started:.1f} 秒）— {cache_dir}")
 
+    alignment = None
+    if args.alignment:
+        data = json.loads(args.alignment.read_text(encoding="utf-8"))
+        entry = next((item for item in data["clips"] if item["name"] == args.scene.name), None)
+        if entry is None:
+            raise SystemExit(f"alignment に {args.scene.name} がありません: {args.alignment}")
+        alignment = {
+            "scale": float(entry["scale"]),
+            "rotation": np.asarray(entry["rotation"], dtype=np.float32),
+            "translation": np.asarray(entry["translation"], dtype=np.float32),
+            "depth_range_world": data.get("depth_range_world"),
+            "world_bounds": data.get("world_bounds"),
+        }
+        log(f"alignment を適用: scale {alignment['scale']:.4f}（{entry['name']}）")
+
     started = time.perf_counter()
-    manifest.update(build_materials(result, cache_dir, args.pick, rebuild=args.rebuild_materials))
+    manifest.update(build_materials(result, cache_dir, args.pick, rebuild=args.rebuild_materials,
+                                    alignment=alignment))
     log(f"2D 素材生成（{time.perf_counter() - started:.1f} 秒）")
 
     started = time.perf_counter()
-    build_3d_materials(cache_dir, rebuild=args.rebuild_materials)
+    build_3d_materials(cache_dir, rebuild=args.rebuild_materials, alignment=alignment)
     log(f"3D 素材生成（{time.perf_counter() - started:.1f} 秒）")
 
     materials = manifest["materials"]
