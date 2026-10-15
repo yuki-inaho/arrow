@@ -58,7 +58,11 @@ def discover_clips(clips_dir: Path) -> list[tuple[Path, int, int]]:
 
 
 def merge_videos(videos_dir: Path, clips: list[tuple[Path, int, int]], output: Path) -> None:
-    """クリップ動画を ffmpeg concat（無再エンコード）で単一 MP4 に結合する。"""
+    """クリップ動画を ffmpeg concat（無再エンコード）で単一 MP4 に結合する。
+
+    クリップ動画は render_multipanel.py --display-skip で重複区間を除いて
+    生成されている前提（結合後は各フレームが 1 回ずつ表示される）。
+    """
     paths = []
     for npz_path, _, _ in clips:
         candidates = [videos_dir / f"{npz_path.stem}_dashboard.mp4"]
@@ -125,14 +129,20 @@ def merge_reruns(clips: list[tuple[Path, int, int]], output: Path, pick: int,
     export_rerun.send_blueprint(eye, target)
     frame_end = 0
     log_static = True
-    for npz_path, start, _ in clips:
+    previous_end = None
+    for npz_path, start, total in clips:
+        # 前クリップと重複するフレームはログしない（アライメント計算専用の重複）
+        skip = max(0, previous_end - start) if previous_end is not None else 0
+        previous_end = start + total
         cache_dir = default_cache_dir(npz_path)
         _, manifest, hit = ensure_cache(npz_path, cache_dir, pick, None, rebuild=False)
         part_alignment = export_rerun.load_alignment_entry(alignment_data, npz_path.name)
-        log(f"  rerun 部分記録: {npz_path.name}（frame {start} から、"
-            f"キャッシュ{'ヒット' if hit else '構築'}）")
+        skip_note = f"、重複 {skip} フレームをスキップ" if skip else ""
+        log(f"  rerun 部分記録: {npz_path.name}（frame {start + skip} から、"
+            f"キャッシュ{'ヒット' if hit else '構築'}{skip_note}）")
         frames = export_rerun.log_scene(cache_dir, manifest, frame_offset=start,
-                                        log_static=log_static, alignment=part_alignment)
+                                        log_static=log_static, alignment=part_alignment,
+                                        skip_frames=skip)
         frame_end = start + frames
         log_static = False
     rr.save(str(output))

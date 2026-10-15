@@ -818,6 +818,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--cache-dir", type=Path, help="キャッシュ先（既定: results/dashboard_cache/…）")
     parser.add_argument("--pick", type=int, default=56, help="識別色を付ける追跡点の数（既定 56）")
     parser.add_argument("--rebuild-materials", action="store_true", help="素材を再生成する")
+    parser.add_argument("--display-skip", type=int, default=0,
+                        help="先頭 N フレームを動画に含めない（クリップ重複区間の除去用。既定 0）")
     parser.add_argument("--alignment", type=Path,
                         help="align_clip_scenes.py の alignments.json（クリップ結合の座標系接続を適用）")
     parser.add_argument("--output", type=Path, help="統合動画 mp4 を出力する（全フレーム合成 → エンコード）")
@@ -913,13 +915,14 @@ def main(argv: list[str] | None = None) -> int:
         frames_dir.mkdir(parents=True)
         started = time.perf_counter()
         index = 0
-        for frame_t in range(frames):
+        skip_note = f"（先頭 {args.display_skip} フレームをスキップ）" if args.display_skip else ""
+        for frame_t in range(args.display_skip, frames):
             board = compose_frame(cache_dir, frame_t)
             for _ in range(max(1, args.hold)):
                 board.save(frames_dir / f"frame_{index:04d}.png")
                 index += 1
             if (frame_t + 1) % 6 == 0:
-                log(f"  … {frame_t + 1}/{frames} 枚")
+                log(f"  … {frame_t + 1}/{frames} 枚{skip_note}")
         compose_seconds = time.perf_counter() - started
         if shutil.which("ffmpeg") is None:
             raise SystemExit("ffmpeg が見つかりません")

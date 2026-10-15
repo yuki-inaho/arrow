@@ -155,12 +155,13 @@ def send_blueprint(eye_position: np.ndarray, look_target: np.ndarray) -> None:
 
 
 def log_scene(cache_dir: Path, manifest: dict, *, frame_offset: int = 0, log_static: bool = True,
-              alignment: dict | None = None) -> int:
+              alignment: dict | None = None, skip_frames: int = 0) -> int:
     """キャッシュ済みシーンを現在の rerun セッションへログする（保存はしない）。
 
     log_static は点群・全軌跡・全カメラ視錐台（static=True）を送るかどうか。
     クリップ結合では最初のクリップだけ True にすると、全体で 1 回の静的記録になる。
     alignment 指定時は点群・軌跡・カメラを世界座標へ変換する（クリップ間の連続性）。
+    skip_frames は先頭からログしないフレーム数（クリップ重複区間の除去用）。
     フレーム軸は `frame_offset` を起点にした連番。戻り値はログしたフレーム数。
     """
     import rerun as rr
@@ -258,7 +259,7 @@ def log_scene(cache_dir: Path, manifest: dict, *, frame_offset: int = 0, log_sta
     # 時間軸に沿った記録: 2D 6 面 + 追跡点マーカー + 現在カメラの視錐台
     pattern = manifest["panels_pattern"]
     frames = manifest["scene"]["frames"]
-    for frame_t in range(frames):
+    for frame_t in range(skip_frames, frames):
         rr.set_time("frame", sequence=frame_offset + frame_t)
         for view_path, panel in PANEL_VIEWS.items():
             image_path = cache_dir / pattern.format(index=frame_t, panel=panel)
