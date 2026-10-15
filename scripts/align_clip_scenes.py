@@ -37,6 +37,7 @@ def log(message: str) -> None:
 
 CAMERA_WEIGHT = 400  # カメラ位置 1 点あたりの重み（点群 ~8800 点に対して ~15% になる複製数）
 STATIC_TRACK_THRESHOLD = 0.02  # 静止トラック点の判定（重複区間内の 3D 位置変動。シーン ~16 に対して）
+DEPTH_WORLD_PERCENTILES = (10, 90)  # 世界共通の深度表示範囲（中央を重視して色のコントラストを確保）
 
 
 def load_scene(npz_path: Path, pick: int) -> dict[str, Any]:
@@ -80,8 +81,15 @@ def load_scene(npz_path: Path, pick: int) -> dict[str, Any]:
     seeds = t_count // frames
     track_points = result.predictions.points[0, t_start : t_start + t_count].numpy()
     tracks_grid = track_points.reshape(frames, seeds, 3)
+
+    # 深度（参照カメラ座標の z）: 世界共通の表示範囲の計算に使う
+    depth_entry = next(g for g in result.metadata["groups"] if g["task"] == "depth")
+    d_start, d_count = depth_entry["start"], depth_entry["count"]
+    depth_points = result.predictions.points[0, d_start : d_start + d_count].numpy()
+    depth_z = depth_points.reshape(frames, d_count // frames, 3)[..., 2]
+
     return {"cache_dir": cache_dir, "cameras": cameras, "points": grid,
-            "tracks": tracks_grid}
+            "tracks": tracks_grid, "depth": depth_z}
 
 
 def umeyama(source: np.ndarray, target: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
@@ -241,42 +249,57 @@ def estimate_chain(clips: list[dict]) -> list[dict]:
 
 
 def world_depth_range(clips: list[dict], transforms: list[dict]) -> list[float] | None:
-    """各クリップの深度範囲（5–95 パーセンタイル）をスケール補正して統合する。"""
-    lows, highs = [], []
+    """全クリップの深度値をスケール補正して統合した世界共通の表示範囲。
+
+    各クリップの範囲を機械的に統合すると端（外れ値）で範囲が広がり色の
+    コントラストが弱まるため、全深度値の分布からパーセンタイルを取る。
+    """
+    values = []
     for clip, transform in zip(clips, transforms):
-        manifest_path = clip["cache_dir"] / "manifest.json"
-        if not manifest_path.is_file():
-            continue
-        depth_range = json.loads(manifest_path.read_text()).get("depth_range")
-        if not depth_range:
-            continue
-        scale = transform["scale"]
-        lows.append(scale * float(depth_range["low"]))
-        highs.append(scale * float(depth_range["high"]))
-    if not lows:
+        z = np.asarray(clip["depth"])
+        finite = z[np.isfinite(z)]
+        if len(finite):
+            values.append(finite * transform["scale"])
+    if not values:
         return None
-    return [min(lows), max(highs)]
+    merged = np.concatenate(values)
+    low, high = np.percentile(merged, list(DEPTH_WORLD_PERCENTILES))
+    return [float(low), float(high)]
 
 
-def world_bounds(clips: list[dict], transforms: list[dict]) -> dict | None:
-    """全クリップの再構成点とカメラ位置を世界座標へ変換した統合バウンズ（共通視点用）。"""
-    lows, highs = [], []
-    for clip, transform in zip(clips, transforms):
-        samples = clip["points"].reshape(-1, 3)
-        cameras = clip["cameras"]["camera_to_reference"][:, :3, 3]
-        samples = np.concatenate([samples, cameras], axis=0)
+def world_extents(clips: list[dict], transforms: list[dict]) -> dict | None:
+    """世界座標での範囲を「点群」「カメラ位置」「統合」に分けて返す（パネル別視点用）。"""
+
+    def to_world(samples: np.ndarray, transform: dict) -> np.ndarray | None:
         finite = samples[np.isfinite(samples).all(-1)]
         if not len(finite):
-            continue
-        world = (transform["scale"] * (finite @ transform["rotation"].T)
-                 + transform["translation"])
-        lows.append(world.min(axis=0))
-        highs.append(world.max(axis=0))
-    if not lows:
-        return None
-    low = np.min(np.stack(lows), axis=0)
-    high = np.max(np.stack(highs), axis=0)
-    return {"low": low.round(4).tolist(), "high": high.round(4).tolist()}
+            return None
+        return (transform["scale"] * (finite @ transform["rotation"].T)
+                + transform["translation"])
+
+    point_lows, point_highs = [], []
+    camera_lows, camera_highs = [], []
+    for clip, transform in zip(clips, transforms):
+        world_points = to_world(clip["points"].reshape(-1, 3), transform)
+        if world_points is not None:
+            point_lows.append(world_points.min(axis=0))
+            point_highs.append(world_points.max(axis=0))
+        world_cameras = to_world(clip["cameras"]["camera_to_reference"][:, :3, 3], transform)
+        if world_cameras is not None:
+            camera_lows.append(world_cameras.min(axis=0))
+            camera_highs.append(world_cameras.max(axis=0))
+
+    def merge(lows: list, highs: list) -> dict | None:
+        if not lows:
+            return None
+        low = np.min(np.stack(lows), axis=0)
+        high = np.max(np.stack(highs), axis=0)
+        return {"low": low.round(4).tolist(), "high": high.round(4).tolist()}
+
+    points = merge(point_lows, point_highs)
+    cameras = merge(camera_lows, camera_highs)
+    overall = merge(point_lows + camera_lows, point_highs + camera_highs)
+    return {"points": points or overall, "cameras": cameras or points, "overall": overall}
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -338,7 +361,7 @@ def main(argv: list[str] | None = None) -> int:
             for clip, transform in zip(clips, transforms)
         ],
         "depth_range_world": depth_range,
-        "world_bounds": world_bounds(clips, transforms),
+        "world_bounds": world_extents(clips, transforms),
         "notes": "相似変換は重複フレームの再構成点群の密対応から Umeyama 法で推定。",
     }
     args.output.write_text(json.dumps(output, ensure_ascii=False, indent=1) + "\n")

@@ -450,10 +450,11 @@ def render_scene3d(frame_t: int, tracks, cloud, cameras, bounds,
     return Image.fromarray(array.copy())
 
 
-def render_cam3d(frame_t: int, cameras, extent=None) -> Image.Image:
-    """カメラ姿勢: 上方からの視点。位置（x, 前）と撮影方向。現在フレームを強調。
+def render_cam3d(frame_t: int, cameras, extent=None, frustum_scale=None) -> Image.Image:
+    """カメラ姿勢: 上方からの視点。各フレームの視錐台を 2D 投影で表示し、現在を強調。
 
     extent を渡すと表示範囲を固定できる（クリップ間で共通の見え方にする）。
+    frustum_scale を渡すと視錐台の大きさを固定できる（世界スパンに比例させる）。
     """
     import matplotlib
 
@@ -475,7 +476,8 @@ def render_cam3d(frame_t: int, cameras, extent=None) -> Image.Image:
     else:
         span = 1.0
     span = max(span, 1e-6)
-    frustum_scale = span * 0.06
+    if frustum_scale is None:
+        frustum_scale = span * 0.06
 
     fig = plt.figure(figsize=(4.42, 1.98), dpi=100, facecolor="#0F1116")
     ax = fig.add_subplot(facecolor="#0F1116")
@@ -612,24 +614,35 @@ def build_3d_materials(cache_dir: Path, rebuild: bool = False,
     frames = int(summary["frames"])
     panels = cache_dir / "panels"
     world = alignment.get("world_bounds") if alignment else None
-    if world:
-        low = np.asarray(world["low"], dtype=np.float32)
-        high = np.asarray(world["high"], dtype=np.float32)
+    camera_extent_override = None
+    if world and world.get("points"):
+        # 3D 主画面: 点群の範囲に寄る（世界共通の視点は保ったまま、点群が大きく見えるようズーム）
+        low = np.asarray(world["points"]["low"], dtype=np.float32)
+        high = np.asarray(world["points"]["high"], dtype=np.float32)
         # 参照座標 → 表示座標 (x, z, -y) に合わせて各軸の min/max を組み替える
         low_display = np.array([low[0], low[2], -high[1]], dtype=np.float32)
         high_display = np.array([high[0], high[2], -low[1]], dtype=np.float32)
-        pad = 0.06 * float(np.max(high_display - low_display))
+        pad = 0.05 * float(np.max(high_display - low_display))
         bounds = {
             "x": (float(low_display[0] - pad), float(high_display[0] + pad)),
             "y": (float(low_display[1] - pad), float(high_display[1] + pad)),
             "z": (float(low_display[2] - pad), float(high_display[2] + pad)),
         }
+        if world.get("cameras"):
+            # カメラ姿勢: カメラ位置の範囲にズーム（視錐台が収まる余白を付ける）
+            cam_low = np.asarray(world["cameras"]["low"], dtype=np.float32)
+            cam_high = np.asarray(world["cameras"]["high"], dtype=np.float32)
+            frustum_pad = float(np.max(high_display - low_display)) * 0.08
+            camera_extent_override = (
+                (float(cam_low[0] - frustum_pad), float(cam_high[0] + frustum_pad)),
+                (float(cam_low[2] - frustum_pad), float(cam_high[2] + frustum_pad)),
+            )
     else:
         bounds = scene_bounds(display(cloud["points"]), display(tracks["xyz"]))
     track_bounds = scene_bounds(display(tracks["xyz"]))
 
     started = time.perf_counter()
-    camera_extent = (bounds["x"], bounds["y"])
+    camera_extent = camera_extent_override or (bounds["x"], bounds["y"])
     # 視錐台の大きさは表示範囲に比例させる（世界座標では固定値だと見えないほど小さくなる）
     span = max(bounds["x"][1] - bounds["x"][0], bounds["y"][1] - bounds["y"][0],
                bounds["z"][1] - bounds["z"][0])
@@ -638,7 +651,8 @@ def build_3d_materials(cache_dir: Path, rebuild: bool = False,
         targets = [
             ("scene3d", lambda t=frame_t: render_scene3d(t, tracks, cloud, cameras, bounds,
                                                          frustum_scale)),
-            ("cam3d", lambda t=frame_t: render_cam3d(t, cameras, camera_extent)),
+            ("cam3d", lambda t=frame_t: render_cam3d(t, cameras, camera_extent,
+                                                     frustum_scale)),
             ("tracks3d", lambda t=frame_t: render_tracks3d(t, tracks, track_bounds)),
             ("summary", lambda t=frame_t: render_summary(t, summary)),
         ]

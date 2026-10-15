@@ -74,9 +74,12 @@ def estimate_view(cache_dir: Path, alignment: dict | None = None) -> tuple[np.nd
     alignment に world_bounds があれば全クリップ共通の範囲から求める
     （クリップ結合時に視点が変わらないように）。
     """
-    if alignment is not None and alignment.get("world_bounds"):
-        low = np.asarray(alignment["world_bounds"]["low"], dtype=np.float32)
-        high = np.asarray(alignment["world_bounds"]["high"], dtype=np.float32)
+    world = alignment.get("world_bounds") if alignment else None
+    if world:
+        # 新形式（points/cameras/overall）と旧形式（low/high）の両対応
+        points = world.get("points", world)
+        low = np.asarray(points["low"], dtype=np.float32)
+        high = np.asarray(points["high"], dtype=np.float32)
         low_display = np.array([low[0], low[2], -high[1]], dtype=np.float32)
         high_display = np.array([high[0], high[2], -low[1]], dtype=np.float32)
         center = (low_display + high_display) / 2
@@ -191,8 +194,9 @@ def log_scene(cache_dir: Path, manifest: dict, *, frame_offset: int = 0, log_sta
             )
         world = alignment.get("world_bounds")
         if world:
-            low = np.asarray(world["low"], dtype=np.float32)
-            high = np.asarray(world["high"], dtype=np.float32)
+            points = world.get("points", world)
+            low = np.asarray(points["low"], dtype=np.float32)
+            high = np.asarray(points["high"], dtype=np.float32)
             frustum_scale = float(np.max(high - low)) * 0.05
 
     cloud_display = to_display(cloud_points)
