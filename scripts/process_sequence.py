@@ -63,17 +63,24 @@ def total_frames(path: Path) -> int:
         return frames
 
 
-def plan_clips(start: int, total: int, clip_frames: int, stride: int) -> list[tuple[int, int]]:
-    """(start, end) の一覧を返す。end は排他（CLI の --end と同じ意味）。"""
+def plan_clips(start: int, total: int, clip_frames: int, stride: int,
+               overlap: int = 0) -> list[tuple[int, int]]:
+    """(start, end) の一覧を返す。end は排他（CLI の --end と同じ意味）。
+
+    overlap > 0 のとき、隣接クリップ間で選択フレームを overlap 個重複させる
+    （クリップ間の座標系接続・スケール補正に使う）。開始位置の進みは
+    (clip_frames - overlap) * stride フレーム。
+    """
     clips = []
     cursor = start
     span = clip_frames * stride
+    step = max(1, (clip_frames - overlap) * stride)
     while cursor < total:
         end = min(cursor + span, total)
         if end <= cursor:
             break
         clips.append((cursor, end))
-        cursor = end
+        cursor += step
     return clips
 
 
@@ -158,6 +165,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="1 クリップあたりのフレーム数（既定: 24）")
     parser.add_argument("--frame-stride", type=int, default=1,
                         help="クリップ内で何フレームおきに使うか（既定: 1）")
+    parser.add_argument("--clip-overlap", type=int, default=0,
+                        help="クリップ間の重複フレーム数（stride 単位。座標系接続用。既定: 0）")
     parser.add_argument("--start", type=int, default=0, help="開始フレーム番号（既定: 0）")
     parser.add_argument("--tasks", nargs="+", default=["track", "pose"],
                         help="実行するタスク（既定: track pose）")
@@ -175,6 +184,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error(f"入力が見つかりません: {args.input}")
     if args.clip_frames < 1 or args.frame_stride < 1 or args.start < 0:
         parser.error("clip-frames と frame-stride は 1 以上、start は 0 以上が必要です")
+    if args.clip_overlap < 0 or args.clip_overlap >= args.clip_frames:
+        parser.error("clip-overlap は 0 以上 clip-frames 未満が必要です")
     if args.output_dir is None:
         args.output_dir = REPO / "results" / f"{args.input.stem}_clips"
     args.output_dir = args.output_dir.expanduser().resolve()
@@ -184,7 +195,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     total = total_frames(args.input)
-    clips = plan_clips(args.start, total, args.clip_frames, args.frame_stride)
+    clips = plan_clips(args.start, total, args.clip_frames, args.frame_stride,
+                       args.clip_overlap)
     if not clips:
         raise SystemExit(f"選択範囲にフレームがありません（総数 {total}、開始 {args.start}）")
 
@@ -192,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
         "input": str(args.input),
         "clip_frames": args.clip_frames,
         "frame_stride": args.frame_stride,
+        "clip_overlap": args.clip_overlap,
         "start": args.start,
         "tasks": args.tasks,
         "max_side": args.max_side,
@@ -206,7 +219,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"入力: {args.input}（総フレーム数 {total}）")
     print(f"出力: {args.output_dir}")
     print(f"クリップ: {len(clips)} 個 × 最大 {args.clip_frames} フレーム"
-          f"（{args.frame_stride} フレームおき、タスク: {' '.join(args.tasks)}）")
+          f"（{args.frame_stride} フレームおき、重複 {args.clip_overlap}、"
+          f"タスク: {' '.join(args.tasks)}）")
     if args.dry_run:
         for index, (start, end) in enumerate(clips, 1):
             print(f"  [{index}/{len(clips)}] {clip_name(start, end, args.frame_stride)}"

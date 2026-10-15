@@ -100,34 +100,45 @@ def merge_videos(videos_dir: Path, clips: list[tuple[Path, int, int]], output: P
         f"{output.stat().st_size / 2**20:.1f} MB）")
 
 
-def merge_reruns(clips: list[tuple[Path, int, int]], output: Path, pick: int) -> None:
+def merge_reruns(clips: list[tuple[Path, int, int]], output: Path, pick: int,
+                 alignment_path: Path | None = None) -> None:
     """全クリップを 1 セッションへ連番フレームでログし、単一の .rrd として保存する。
 
     rrd の単純マージでは recording が分割されるため、同一プロセス内で連続ログする。
     フレーム軸は全クリップ通しの連番（クリップの開始フレーム番号をオフセットに使う）。
+    alignment_path 指定時は各クリップを世界座標へ変換してログする（クリップ間の連続性）。
     """
     import rerun as rr
 
     from render_dashboard import default_cache_dir, ensure_cache
 
+    alignment_data = None
+    if alignment_path is not None:
+        alignment_data = json.loads(alignment_path.read_text(encoding="utf-8"))
+        log(f"alignment を適用: {alignment_path}")
+
     output.parent.mkdir(parents=True, exist_ok=True)
     rr.init("arrow_all_clips", spawn=False)
-    eye, target = export_rerun.estimate_view(default_cache_dir(clips[0][0]))
+    first_cache = default_cache_dir(clips[0][0])
+    first_alignment = export_rerun.load_alignment_entry(alignment_data, clips[0][0].name)
+    eye, target = export_rerun.estimate_view(first_cache, first_alignment)
     export_rerun.send_blueprint(eye, target)
     frame_end = 0
     log_static = True
     for npz_path, start, _ in clips:
         cache_dir = default_cache_dir(npz_path)
         _, manifest, hit = ensure_cache(npz_path, cache_dir, pick, None, rebuild=False)
+        part_alignment = export_rerun.load_alignment_entry(alignment_data, npz_path.name)
         log(f"  rerun 部分記録: {npz_path.name}（frame {start} から、"
             f"キャッシュ{'ヒット' if hit else '構築'}）")
         frames = export_rerun.log_scene(cache_dir, manifest, frame_offset=start,
-                                        log_static=log_static)
+                                        log_static=log_static, alignment=part_alignment)
         frame_end = start + frames
         log_static = False
     rr.save(str(output))
+    world_note = "・世界座標" if alignment_data is not None else ""
     log(f"rerun を結合: {output}（{len(clips)} クリップ / 全 {frame_end} フレーム、"
-        f"{output.stat().st_size / 2**20:.1f} MB、単一レコーディング・フレーム軸連番）")
+        f"{output.stat().st_size / 2**20:.1f} MB、単一レコーディング・フレーム軸連番{world_note}）")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -141,6 +152,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-rrd", type=Path,
                         help="結合 rerun の出力パス（既定: clips-dir/merged_all.rrd）")
     parser.add_argument("--pick", type=int, default=56, help="軌跡の本数（既定 56。キャッシュと一致させる）")
+    parser.add_argument("--alignment", type=Path,
+                        help="align_clip_scenes.py の alignments.json（世界座標接続を適用）")
     parser.add_argument("--skip-video", action="store_true", help="動画の結合を省略する")
     parser.add_argument("--skip-rrd", action="store_true", help="rerun の結合を省略する")
     args = parser.parse_args(argv)
@@ -148,6 +161,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args.videos_dir = (args.videos_dir or args.clips_dir).expanduser().resolve()
     args.output_video = (args.output_video or args.clips_dir / "merged_all_dashboard.mp4").expanduser().resolve()
     args.output_rrd = (args.output_rrd or args.clips_dir / "merged_all.rrd").expanduser().resolve()
+    if args.alignment is not None:
+        args.alignment = args.alignment.expanduser().resolve()
     if not args.clips_dir.is_dir():
         parser.error(f"クリップディレクトリが見つかりません: {args.clips_dir}")
     return args
@@ -163,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.skip_video:
         merge_videos(args.videos_dir, clips, args.output_video)
     if not args.skip_rrd:
-        merge_reruns(clips, args.output_rrd, args.pick)
+        merge_reruns(clips, args.output_rrd, args.pick, args.alignment)
     return 0
 
 

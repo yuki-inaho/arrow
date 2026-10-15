@@ -23,6 +23,7 @@ Rerun 記録（.rrd）を書き出す。
 
 import argparse
 from io import BytesIO
+import json
 from pathlib import Path
 import sys
 
@@ -67,18 +68,42 @@ def _jpeg_bytes(path: Path) -> bytes:
     return buffer.getvalue()
 
 
-def estimate_view(cache_dir: Path) -> tuple[np.ndarray, np.ndarray]:
-    """点群から観察視点（eye 位置, 注視点）を推定する（表示座標・Z 上）。
+def estimate_view(cache_dir: Path, alignment: dict | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """観察視点（eye 位置, 注視点）を推定する（表示座標・Z 上）。
 
-    動画（matplotlib view_init）と同系の「後方やや左・斜め上から見下ろす」向き。
+    alignment に world_bounds があれば全クリップ共通の範囲から求める
+    （クリップ結合時に視点が変わらないように）。
     """
-    cloud = np.load(cache_dir / "series" / "cloud.npz")["points"]
-    sample = to_display(cloud[:: max(1, len(cloud) // 20000)])
-    low, high = sample.min(0), sample.max(0)
-    center = (low + high) / 2
-    span = float(np.max(high - low))
+    if alignment is not None and alignment.get("world_bounds"):
+        low = np.asarray(alignment["world_bounds"]["low"], dtype=np.float32)
+        high = np.asarray(alignment["world_bounds"]["high"], dtype=np.float32)
+        low_display = np.array([low[0], low[2], -high[1]], dtype=np.float32)
+        high_display = np.array([high[0], high[2], -low[1]], dtype=np.float32)
+        center = (low_display + high_display) / 2
+        span = float(np.max(high_display - low_display))
+    else:
+        cloud = np.load(cache_dir / "series" / "cloud.npz")["points"]
+        sample = to_display(cloud[:: max(1, len(cloud) // 20000)])
+        low, high = sample.min(0), sample.max(0)
+        center = (low + high) / 2
+        span = float(np.max(high - low))
     eye = center + np.array([-0.3, -2.0, 1.0], dtype=np.float32) * span
     return eye, center
+
+
+def load_alignment_entry(data: dict | None, name: str) -> dict | None:
+    """alignments.json からクリップ名に対応する変換（スケール・回転・並進）を取り出す。"""
+    if data is None:
+        return None
+    entry = next((item for item in data["clips"] if item["name"] == name), None)
+    if entry is None:
+        return None
+    return {
+        "scale": float(entry["scale"]),
+        "rotation": np.asarray(entry["rotation"], dtype=np.float32),
+        "translation": np.asarray(entry["translation"], dtype=np.float32),
+        "world_bounds": data.get("world_bounds"),
+    }
 
 
 def send_blueprint(eye_position: np.ndarray, look_target: np.ndarray) -> None:
@@ -126,11 +151,13 @@ def send_blueprint(eye_position: np.ndarray, look_target: np.ndarray) -> None:
     )
 
 
-def log_scene(cache_dir: Path, manifest: dict, *, frame_offset: int = 0, log_static: bool = True) -> int:
+def log_scene(cache_dir: Path, manifest: dict, *, frame_offset: int = 0, log_static: bool = True,
+              alignment: dict | None = None) -> int:
     """キャッシュ済みシーンを現在の rerun セッションへログする（保存はしない）。
 
     log_static は点群・全軌跡・全カメラ視錐台（static=True）を送るかどうか。
     クリップ結合では最初のクリップだけ True にすると、全体で 1 回の静的記録になる。
+    alignment 指定時は点群・軌跡・カメラを世界座標へ変換する（クリップ間の連続性）。
     フレーム軸は `frame_offset` を起点にした連番。戻り値はログしたフレーム数。
     """
     import rerun as rr
@@ -139,18 +166,43 @@ def log_scene(cache_dir: Path, manifest: dict, *, frame_offset: int = 0, log_sta
     cached_cloud = np.load(cache_dir / manifest["series"]["cloud"])
     xyz = cached_tracks["xyz"]           # [T, P, 3]
     colors = cached_tracks["colors"]     # [P, 3] uint8
-    cloud_points = to_display(cached_cloud["points"])
+    cloud_points = cached_cloud["points"]
     cloud_rgb = cached_cloud["rgb"]
 
     cameras_path = cache_dir / "series" / "cameras.npz"
     cameras = dict(np.load(cameras_path)) if cameras_path.is_file() else None
+
+    # 世界座標への変換（クリップ間の位置・向き・スケールの連続性）
+    frustum_scale = FRUSTUM_SCALE
+    if alignment is not None:
+        scale = float(alignment["scale"])
+        rotation = np.asarray(alignment["rotation"], dtype=np.float32)
+        translation = np.asarray(alignment["translation"], dtype=np.float32)
+        cloud_points = scale * (cloud_points @ rotation.T) + translation
+        xyz = scale * (xyz @ rotation.T) + translation
+        if cameras is not None:
+            matrices = cameras["camera_to_reference"].astype(np.float32)
+            new_rotation = np.einsum("ij,fjk->fik", rotation, matrices[:, :3, :3])
+            new_translation = scale * (matrices[:, :3, 3] @ rotation.T) + translation
+            cameras["camera_to_reference"] = np.concatenate(
+                [np.concatenate([new_rotation, new_translation[..., None]], axis=2),
+                 np.tile(np.array([0, 0, 0, 1], dtype=np.float32), (len(matrices), 1, 1))],
+                axis=1,
+            )
+        world = alignment.get("world_bounds")
+        if world:
+            low = np.asarray(world["low"], dtype=np.float32)
+            high = np.asarray(world["high"], dtype=np.float32)
+            frustum_scale = float(np.max(high - low)) * 0.05
+
+    cloud_display = to_display(cloud_points)
 
     # 静的記録（点群・全軌跡・全カメラ・軸）。static=True を付けないと
     # log_time 軸のみに属し、"frame" 軸表示時に隠れる。
     if log_static:
         rr.log(
             "world/reconstruction",
-            rr.Points3D(cloud_points, colors=cloud_rgb, radii=0.025),
+            rr.Points3D(cloud_display, colors=cloud_rgb, radii=0.025),
             static=True,
         )
         strips = []
@@ -171,7 +223,7 @@ def log_scene(cache_dir: Path, manifest: dict, *, frame_offset: int = 0, log_sta
             frusta = []
             for frame in range(len(matrices)):
                 if cameras["valid"][frame]:
-                    frusta.extend(frustum_segments(matrices[frame], FRUSTUM_SCALE))
+                    frusta.extend(frustum_segments(matrices[frame], frustum_scale))
             if frusta:
                 rr.log(
                     "world/cameras",
@@ -184,7 +236,7 @@ def log_scene(cache_dir: Path, manifest: dict, *, frame_offset: int = 0, log_sta
                 rr.LineStrips3D([centers], colors=[CAMERA_PATH], radii=0.02),
                 static=True,
             )
-        span = float(np.max(np.ptp(cloud_points, axis=0)))
+        span = float(np.max(np.ptp(cloud_display, axis=0)))
         length = 0.05 * span
         origin = np.zeros(3, dtype=np.float32)
         rr.log(
@@ -217,7 +269,7 @@ def log_scene(cache_dir: Path, manifest: dict, *, frame_offset: int = 0, log_sta
                 rr.Points3D(to_display(heads[keep]), colors=colors[keep], radii=0.045),
             )
         if cameras is not None and cameras["valid"][frame_t]:
-            segments = frustum_segments(cameras["camera_to_reference"][frame_t], FRUSTUM_SCALE)
+            segments = frustum_segments(cameras["camera_to_reference"][frame_t], frustum_scale)
             rr.log(
                 "world/current_camera",
                 rr.LineStrips3D(segments, colors=[CAMERA_CURRENT] * len(segments), radii=0.03),
@@ -235,11 +287,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="フレームタイムラインの開始番号（クリップ結合時に連番化する。既定 0）")
     parser.add_argument("--recording-id",
                         help="recording ID（同一 recording へ複数シーンを書き足すときに指定する）")
+    parser.add_argument("--alignment", type=Path,
+                        help="align_clip_scenes.py の alignments.json（世界座標接続を適用）")
     args = parser.parse_args(argv)
     args.scene = args.scene.expanduser().resolve()
     args.output = args.output.expanduser().resolve()
     if args.cache_dir is not None:
         args.cache_dir = args.cache_dir.expanduser().resolve()
+    if args.alignment is not None:
+        args.alignment = args.alignment.expanduser().resolve()
     if not args.scene.is_file():
         parser.error(f"シーンが見つかりません: {args.scene}")
     return args
@@ -256,9 +312,17 @@ def main(argv: list[str] | None = None) -> int:
     rr.init(f"arrow_{args.scene.stem}", recording_id=args.recording_id, spawn=False)
     if args.recording_id:
         print(f"recording id を共通化: {args.recording_id}")
-    eye, target = estimate_view(cache_dir)
+    alignment = None
+    if args.alignment:
+        data = json.loads(args.alignment.read_text(encoding="utf-8"))
+        alignment = load_alignment_entry(data, args.scene.name)
+        if alignment is None:
+            raise SystemExit(f"alignment に {args.scene.name} がありません: {args.alignment}")
+        print(f"alignment を適用: scale {alignment['scale']:.4f}")
+    eye, target = estimate_view(cache_dir, alignment)
     send_blueprint(eye, target)
-    frames = log_scene(cache_dir, manifest, frame_offset=args.frame_offset, log_static=True)
+    frames = log_scene(cache_dir, manifest, frame_offset=args.frame_offset, log_static=True,
+                       alignment=alignment)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     rr.save(str(args.output))
