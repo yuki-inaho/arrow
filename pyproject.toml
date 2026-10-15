@@ -51,6 +51,7 @@ dev = [
   "uvicorn>=0.34,<1",
   "python-multipart>=0.0.20",
   "matplotlib>=3.9,<4",
+  "rerun-sdk>=0.39.0",
 ]
 
 [project.urls]
