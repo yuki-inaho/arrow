@@ -1,5 +1,10 @@
 # SR生成版の可視化・運動分解・静止世界
 
+> **2026-10-16 視覚品質の差戻し:** grassの固定世界はユーザー確認で不合格となった。
+> 以下の数値・ファイル検証結果は履歴であり、元映像に近い外観の達成を意味しない。
+> reference版でも基準frameの描画が色を崩し、後続frameでは葉形の大穴と背景投影ずれが残った。
+> reference版を完成成果物として優先案内した判断を撤回し、研究比較に基づく生成手法で再試行中。
+
 既存の [深度詳細化](DEPTH_DETAIL.md) で得た LingBot-Depth → NDR → scene flow SR → temporal の結果から、
 従来の4列動画/Rerunと、動く物体も残した静止世界を生成する。モデル推論は再実行しない。
 入力は `results/depth_detail_oct16/{grass,railway}`、追加出力は `results/sr_static_oct16/{grass,railway}`。

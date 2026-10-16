@@ -1,0 +1,181 @@
+{
+  "revision": "db79b90c60bbb45ceec9e41b9d5a4df934538ac4",
+  "transformer": [
+    {
+      "path": "transformer/config.json",
+      "bytes": 610,
+      "sha256": null,
+      "blob_id": "f3e9366e59d865c8606599ce8e2f832c8d4f6dc8"
+    },
+    {
+      "path": "transformer/diffusion_pytorch_model-00001-of-00013.safetensors",
+      "bytes": 4867114424,
+      "sha256": "bd8bbb8834a274525ab65cbb063f21aa58973a054bfd1638bfe395504c9d9b99",
+      "blob_id": "809577700cdb9490abf95a52bfb248f0ac7327f0"
+    },
+    {
+      "path": "transformer/diffusion_pytorch_model-00002-of-00013.safetensors",
+      "bytes": 4919594456,
+      "sha256": "8d24b40a5ea6bb21cdc0115128241ffeb44184b2419f4b1585af1573ed5c7839",
+      "blob_id": "8e41330f7852b14d437b005d8e200dbcbcf847a6"
+    },
+    {
+      "path": "transformer/diffusion_pytorch_model-00003-of-00013.safetensors",
+      "bytes": 4919465128,
+      "sha256": "7f550f93b3c36c13015dd551109ff63528251864c9513acc2e0a502807b8a91c",
+      "blob_id": "d4dd456854142646bac19cc9e5102bf94c3190e1"
+    },
+    {
+      "path": "transformer/diffusion_pytorch_model-00004-of-00013.safetensors",
+      "bytes": 4919594536,
+      "sha256": "6a701d601e2cbe3da3515b24d59f56deb5ca2c973c778ff7911f579ec5b8ec11",
+      "blob_id": "8a8c5f945d6a610f5c9d137e7b4b6a33bf672309"
+    },
+    {
+      "path": "transformer/diffusion_pytorch_model-00005-of-00013.safetensors",
+      "bytes": 4919465224,
+      "sha256": "7eb65433e529b975f84897f6572af1ae148d82e7fd0ee7c5f4191158736b104f",
+      "blob_id": "48570ced13ec54b2ed9c05ea01d7f422da8b3a9d"
+    },
+    {
+      "path": "transformer/diffusion_pytorch_model-00006-of-00013.safetensors",
+      "bytes": 4919594552,
+      "sha256": "aae199dea0aeb96347e9af9e3cb90679c1c8c2f42c76ee3cead2ea240c909d07",
+      "blob_id": "c2bf142831168b08d9c76b8c42ae9b5ef7f41d0d"
+    },
+    {
+      "path": "transformer/diffusion_pytorch_model-00007-of-00013.safetensors",
+      "bytes": 4919465224,
+      "sha256": "53c24e663dece6ff0737b03e5cc670118998231877ba7bad29824ff0500589d4",
+      "blob_id": "b24a11e9cb2be5740bd1f225a6c85300e3e510e7"
+    },
+    {
+      "path": "transformer/diffusion_pytorch_model-00008-of-00013.safetensors",
+      "bytes": 4919594552,
+      "sha256": "333eaca9dce56bf3083bbab4630aa081b7c403a27ba94894a7756d631529fd9a",
+      "blob_id": "ead7434ee124daf5138e7d7aa9da814e9041573e"
+    },
+    {
+      "path": "transformer/diffusion_pytorch_model-00009-of-00013.safetensors",
+      "bytes": 4919465224,
+      "sha256": "8af811e7ed2ab64a3f6d07827d1b975a9804b78d63c2b3989024bc1b67ac6e5d",
+      "blob_id": "2916ce35ac9587a92d51adef299f698f6049e198"
+    },
+    {
+      "path": "transformer/diffusion_pytorch_model-00010-of-00013.safetensors",
+      "bytes": 4919594552,
+      "sha256": "e8b631e38f0ad21a63c631069658d4be4b55e0cb15e8f5848567482b5862ba63",
+      "blob_id": "47dc4d58add42843749d7ac7c4eda2b7f92868ad"
+    },
+    {
+      "path": "transformer/diffusion_pytorch_model-00011-of-00013.safetensors",
+      "bytes": 4919465224,
+      "sha256": "21032fe150df6f3ac26780fb8ca38d05c4a9585a1b774ceadb5d42bc96ff1b27",
+      "blob_id": "f64b5142b530b53b7d1b224f079f2a9d5cb43c34"
+    },
+    {
+      "path": "transformer/diffusion_pytorch_model-00012-of-00013.safetensors",
+      "bytes": 4971935336,
+      "sha256": "e48bce2ab6bb0885d72ff5e79c56c29335051e5ad715a03807267e248addaff8",
+      "blob_id": "ac0718588837e2c26d47c10c8b9a9986411bd958"
+    },
+    {
+      "path": "transformer/diffusion_pytorch_model-00013-of-00013.safetensors",
+      "bytes": 4217957112,
+      "sha256": "e0e39ee859fc696ebd2c0982202a5d1cf8206eeb82b3b582d954707b9f980f12",
+      "blob_id": "4e8a738e27f8b76a03a0aee25ceb3d1a6a163e81"
+    },
+    {
+      "path": "transformer/diffusion_pytorch_model.safetensors.index.json",
+      "bytes": 119173,
+      "sha256": null,
+      "blob_id": "594e77765b26c13eb86613a35c5328ff0e95145a"
+    }
+  ],
+  "shared_candidates": [
+    {
+      "path": "scheduler/scheduler_config.json",
+      "bytes": 751,
+      "lfs": null,
+      "blob_id": "9bf3f38c31c3621c45cf6f2b0dd57a80cd7052fb",
+      "identical13b": true
+    },
+    {
+      "path": "text_encoder/config.json",
+      "bytes": 850,
+      "lfs": null,
+      "blob_id": "6847b0fc2756dd0f1278fd1dde852fdeb1bb6622",
+      "identical13b": true
+    },
+    {
+      "path": "text_encoder/model-00001-of-00003.safetensors",
+      "bytes": 4935812536,
+      "lfs": "a8e861969c7433e707cc5a74065d795d36cca07ec96eb6763eb4083df7248f58",
+      "blob_id": "3e671d382b9dd6c7fff4cb11756526032d5e6f6c",
+      "identical13b": true
+    },
+    {
+      "path": "text_encoder/model-00002-of-00003.safetensors",
+      "bytes": 4983103192,
+      "lfs": "d57d948ece4837d850b7a859a4415121d57cacf8b9ee1d4db200c67f592902d7",
+      "blob_id": "b35fc9ac361a2b8ee0289121cd045e00cfe57e49",
+      "identical13b": true
+    },
+    {
+      "path": "text_encoder/model-00003-of-00003.safetensors",
+      "bytes": 1442935480,
+      "lfs": "0da9ee284e21d1406df708788db1d502d95d75f69faa25cd26151bf8829b7c5f",
+      "blob_id": "a76bb7245d7e1cb456132b1a8abe2b1e48a87481",
+      "identical13b": true
+    },
+    {
+      "path": "text_encoder/model.safetensors.index.json",
+      "bytes": 22476,
+      "lfs": null,
+      "blob_id": "f3d3d4da90eb33e14c92d88ea346370fa3c0b5b2",
+      "identical13b": true
+    },
+    {
+      "path": "tokenizer/special_tokens_map.json",
+      "bytes": 7079,
+      "lfs": null,
+      "blob_id": "2ed25bf989a28d20b5d4b5822fbc24666d12a6f7",
+      "identical13b": true
+    },
+    {
+      "path": "tokenizer/spiece.model",
+      "bytes": 4548313,
+      "lfs": "e3909a67b780650b35cf529ac782ad2b6b26e6d1f849d3fbb6a872905f452458",
+      "blob_id": "2fe5f347e9f9367585589ae89e997dfbd5cf802c",
+      "identical13b": true
+    },
+    {
+      "path": "tokenizer/tokenizer.json",
+      "bytes": 16837459,
+      "lfs": "20a46ac256746594ed7e1e3ef733b83fbc5a6f0922aa7480eda961743de080ef",
+      "blob_id": "9c6427ab2f801c942da4ee9740f1a750d3978a3b",
+      "identical13b": true
+    },
+    {
+      "path": "tokenizer/tokenizer_config.json",
+      "bytes": 61786,
+      "lfs": null,
+      "blob_id": "847870cb2653176fbb3d4661b7ca971c1251ce55",
+      "identical13b": true
+    },
+    {
+      "path": "vae/config.json",
+      "bytes": 724,
+      "lfs": null,
+      "blob_id": "a5be94e360479a8b513ced12e5d5032bcbd9e60d",
+      "identical13b": true
+    },
+    {
+      "path": "vae/diffusion_pytorch_model.safetensors",
+      "bytes": 507591892,
+      "lfs": "d6e524b3fffede1787a74e81b30976dce5400c4439ba64222168e607ed19e793",
+      "blob_id": "af13d1f7b1bc28a9f1e9cd85cac5da951aead1b3",
+      "identical13b": true
+    }
+  ]
+}
