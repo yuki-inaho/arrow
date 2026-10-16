@@ -1,6 +1,7 @@
 # ARROW 深度詳細化（LingBot-Depth + NDR + scene flow SR）
 
 追加成果物: [SR版の従来可視化・rigid/non-rigid分解・静止世界](SR_STATIC_WORLD.md)。
+grassの入力からMP4/Rerunまでの詳しい手順と配布先: [GRASS_SR_WORKFLOW.md](GRASS_SR_WORKFLOW.md)。
 従来4列動画/Rerun、疎ARROWの表示改善、動く物体を残した固定点群・仮想RGB-Dはこの独立consumerで生成する。
 
 検証日: 2026-10-16。grass107枚・railway80枚を実処理し、独立監査と実Rerun表示を確認済み。

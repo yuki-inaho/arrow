@@ -169,6 +169,7 @@ uv run python scripts/viewer_screenshot.py --scene results/demo_seq/railway_seq.
 
 ## 関連ドキュメント
 
+- [grass SR動画・Rerunの作成と配布](GRASS_SR_WORKFLOW.md) — 入力107枚、各処理段階、再現コマンド、尺度・表示契約、private release
 - [深度詳細化](DEPTH_DETAIL.md) — ARROW暫定scale → LingBot-Depth → NDR → scene flow SR → temporal
 - [SR版の可視化と静止世界](SR_STATIC_WORLD.md) — 従来4列動画/Rerun、camera/物体側flow分離、動体を残す固定点群・仮想RGB-D
 - `docs/INFERENCE.md` — タスク・クエリ・CLI の詳細
