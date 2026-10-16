@@ -169,6 +169,8 @@ uv run python scripts/viewer_screenshot.py --scene results/demo_seq/railway_seq.
 
 ## 関連ドキュメント
 
+- [深度詳細化](DEPTH_DETAIL.md) — ARROW暫定scale → LingBot-Depth → NDR → scene flow SR → temporal
+- [SR版の可視化と静止世界](SR_STATIC_WORLD.md) — 従来4列動画/Rerun、camera/物体側flow分離、動体を残す固定点群・仮想RGB-D
 - `docs/INFERENCE.md` — タスク・クエリ・CLI の詳細
 - `docs/VIEWER.md` — ビューアの入力選択・実行・表示・保存
 - `docs/ONBOARDING.md` — 環境構築と検証手順のまとめ
